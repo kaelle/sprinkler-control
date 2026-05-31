@@ -109,16 +109,33 @@ void mqttReconnect() {
   if (millis() - lastMQTTReconnect < 5000) return;
   lastMQTTReconnect = millis();
 
+  Serial.print("Connecting to MQTT... ");
+
   if (mqttClient.connect("SprinklerUnoR4", MQTT_USER, MQTT_PASS)) {
+    Serial.println("connected");
+
+    // Subscribe to command topics
     for (int i = 0; i < NUM_ZONES; i++) {
-      mqttClient.subscribe(("sprinkler/zone" + String(i+1) + "/set").c_str());
+      String topic = "sprinkler/zone" + String(i + 1) + "/set";
+      mqttClient.subscribe(topic.c_str());
     }
+
+    // ← NEW: Publish current state of ALL zones on connect
+    Serial.println("Publishing initial zone states...");
+    for (int i = 0; i < NUM_ZONES; i++) {
+      publishZoneStatus(i);
+    }
+
+  } else {
+    Serial.println("failed");
   }
 }
 
 void publishZoneStatus(int zone) {
   bool isOn = (digitalRead(relayPins[zone]) == LOW);
-  String topic = "sprinkler/zone" + String(zone+1) + "/state";
+  String topic = "sprinkler/zone" + String(zone + 1) + "/state";
+  
+  // Important: retain = true so HA remembers the state
   mqttClient.publish(topic.c_str(), isOn ? "ON" : "OFF", true);
 }
 
