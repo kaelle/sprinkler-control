@@ -26,10 +26,10 @@ struct ZoneSchedule {
 
 ZoneSchedule schedules[NUM_ZONES];
 
-int manualRunMinutes = 5;           // Default manual ON duration
+int manualRunMinutes = 5;
 
 WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, "pool.ntp.org", -7 * 3600);  // Change offset for your timezone
+NTPClient timeClient(ntpUDP, "pool.ntp.org", -7 * 3600);
 
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
@@ -38,61 +38,9 @@ unsigned long lastScheduleCheck = 0;
 unsigned long zoneOffTime[NUM_ZONES] = {0};
 unsigned long lastMQTTReconnect = 0;
 
-// ====================== MQTT CALLBACK ======================
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  String t = String(topic);
-  String p = "";
-  for (unsigned int i = 0; i < length; i++) p += (char)payload[i];
-
-  for (int i = 0; i < NUM_ZONES; i++) {
-    String cmdTopic = "sprinkler/zone" + String(i+1) + "/set";
-    if (t == cmdTopic) {
-      if (p == "ON") {
-        digitalWrite(relayPins[i], LOW);
-        zoneOffTime[i] = millis() + (unsigned long)manualRunMinutes * 60000UL;
-        Serial.print("MQTT → Zone ");
-        Serial.print(i+1);
-        Serial.println(" ON (manual)");
-      } else if (p == "OFF") {
-        digitalWrite(relayPins[i], HIGH);
-        zoneOffTime[i] = 0;
-        Serial.print("MQTT → Zone ");
-        Serial.print(i+1);
-        Serial.println(" OFF");
-      }
-      publishZoneStatus(i);
-    }
-  }
-}
-
-// ====================== PUBLISH STATUS ======================
-void publishZoneStatus(int zone) {
-  bool isOn = (digitalRead(relayPins[zone]) == LOW);
-  String topic = "sprinkler/zone" + String(zone+1) + "/state";
-  mqttClient.publish(topic.c_str(), isOn ? "ON" : "OFF", true);
-}
-
-// ====================== MQTT RECONNECT ======================
-void mqttReconnect() {
-  if (millis() - lastMQTTReconnect < 5000) return;
-  lastMQTTReconnect = millis();
-
-  Serial.print("Connecting to MQTT...");
-  if (mqttClient.connect("SprinklerUnoR4", MQTT_USER, MQTT_PASS)) {
-    Serial.println("connected");
-    for (int i = 0; i < NUM_ZONES; i++) {
-      String topic = "sprinkler/zone" + String(i+1) + "/set";
-      mqttClient.subscribe(topic.c_str());
-    }
-  } else {
-    Serial.println("failed");
-  }
-}
-
 void setup() {
   Serial.begin(115200);
 
-  // Initialize relays and default schedules
   for (int i = 0; i < NUM_ZONES; i++) {
     pinMode(relayPins[i], OUTPUT);
     digitalWrite(relayPins[i], HIGH);
@@ -110,7 +58,6 @@ void setup() {
   strcpy(schedules[4].name, "Zone 5");
   strcpy(schedules[5].name, "Zone 6");
 
-  // WiFi
   WiFi.begin(SECRET_SSID, SECRET_PASS);
   while (WiFi.status() != WL_CONNECTED) {
     delay(1000);
@@ -118,7 +65,6 @@ void setup() {
   }
   Serial.println("\nWiFi connected! IP: " + WiFi.localIP().toString());
 
-  // MQTT
   mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
   mqttClient.setCallback(mqttCallback);
 
@@ -128,17 +74,52 @@ void setup() {
 void loop() {
   if (WiFi.status() != WL_CONNECTED) return;
 
-  if (!mqttClient.connected()) {
-    mqttReconnect();
-  }
+  if (!mqttClient.connected()) mqttReconnect();
   mqttClient.loop();
 
-  // Non-blocking scheduler
   if (millis() - lastScheduleCheck > 10000) {
     lastScheduleCheck = millis();
     timeClient.update();
     checkSchedules();
   }
+}
+
+// ==================== MQTT CALLBACK ====================
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  String t = String(topic);
+  String p = "";
+  for (unsigned int i = 0; i < length; i++) p += (char)payload[i];
+
+  for (int i = 0; i < NUM_ZONES; i++) {
+    String cmdTopic = "sprinkler/zone" + String(i+1) + "/set";
+    if (t == cmdTopic) {
+      if (p == "ON") {
+        digitalWrite(relayPins[i], LOW);
+        zoneOffTime[i] = millis() + (unsigned long)manualRunMinutes * 60000UL;
+      } else if (p == "OFF") {
+        digitalWrite(relayPins[i], HIGH);
+        zoneOffTime[i] = 0;
+      }
+      publishZoneStatus(i);
+    }
+  }
+}
+
+void mqttReconnect() {
+  if (millis() - lastMQTTReconnect < 5000) return;
+  lastMQTTReconnect = millis();
+
+  if (mqttClient.connect("SprinklerUnoR4", MQTT_USER, MQTT_PASS)) {
+    for (int i = 0; i < NUM_ZONES; i++) {
+      mqttClient.subscribe(("sprinkler/zone" + String(i+1) + "/set").c_str());
+    }
+  }
+}
+
+void publishZoneStatus(int zone) {
+  bool isOn = (digitalRead(relayPins[zone]) == LOW);
+  String topic = "sprinkler/zone" + String(zone+1) + "/state";
+  mqttClient.publish(topic.c_str(), isOn ? "ON" : "OFF", true);
 }
 
 // ==================== NON-BLOCKING SCHEDULER ====================
