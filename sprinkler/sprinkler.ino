@@ -131,6 +131,7 @@ void mqttReconnect() {
     for (int i = 0; i < NUM_ZONES; i++) {
       publishZoneStatus(i);
       publishEnabledStatus(i);
+      publishNextRunTime(i);
     }
 
   } else {
@@ -149,6 +150,11 @@ void publishZoneStatus(int zone) {
 void publishEnabledStatus(int zone) {
   String topic = "sprinkler/zone" + String(zone + 1) + "/enabled/state";
   mqttClient.publish(topic.c_str(), schedules[zone].enabled ? "ON" : "OFF", true);
+}
+
+void publishNextRunTime(int zone) {
+  String topic = "sprinkler/zone" + String(zone + 1) + "/next_run";
+  mqttClient.publish(topic.c_str(), getNextRunTime(zone).c_str(), true);
 }
 
 // ==================== NON-BLOCKING SCHEDULER ====================
@@ -179,4 +185,48 @@ void checkSchedules() {
       publishZoneStatus(i);
     }
   }
+}
+
+// ==================== CALCULATE NEXT RUN TIME ====================
+String getNextRunTime(int zone) {
+  if (!schedules[zone].enabled) return "Disabled";
+
+  int curDay  = timeClient.getDay();     // 0=Sunday ... 6=Saturday
+  int curHour = timeClient.getHours();
+  int curMin  = timeClient.getMinutes();
+
+  for (int offset = 0; offset < 7; offset++) {
+    int checkDay = (curDay + offset) % 7;
+
+    if (schedules[zone].activeDays[checkDay]) {
+      int targetHour = schedules[zone].startHour;
+      int targetMin  = schedules[zone].startMinute;
+
+      // If today and time has already passed → skip to next day
+      if (offset == 0 && (curHour > targetHour || (curHour == targetHour && curMin >= targetMin))) {
+        continue;
+      }
+
+      String result = "";
+      if (offset == 0)      result = "Today ";
+      else if (offset == 1) result = "Tomorrow ";
+      else {
+        const char* dayNames[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+        result = String(dayNames[checkDay]) + " ";
+      }
+
+      // Format time (12-hour with AM/PM)
+      int dispH = (targetHour == 0) ? 12 : (targetHour > 12 ? targetHour - 12 : targetHour);
+      result += String(dispH) + ":";
+      if (targetMin < 10) result += "0";
+      result += String(targetMin);
+      result += (targetHour >= 12) ? " PM" : " AM";
+
+      // Add duration
+      result += " (" + String(schedules[zone].durationMinutes) + " min)";
+
+      return result;
+    }
+  }
+  return "No future run";
 }
