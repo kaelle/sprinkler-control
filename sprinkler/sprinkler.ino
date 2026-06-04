@@ -84,14 +84,15 @@ void loop() {
   }
 }
 
-// ==================== MQTT CALLBACK ====================
+// ==================== MQTT CALLBACK (Updated) ====================
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   String t = String(topic);
   String p = "";
   for (unsigned int i = 0; i < length; i++) p += (char)payload[i];
 
   for (int i = 0; i < NUM_ZONES; i++) {
-    String cmdTopic = "sprinkler/zone" + String(i+1) + "/set";
+    // === Manual ON/OFF ===
+    String cmdTopic = "sprinkler/zone" + String(i + 1) + "/set";
     if (t == cmdTopic) {
       if (p == "ON") {
         digitalWrite(relayPins[i], LOW);
@@ -101,6 +102,13 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         zoneOffTime[i] = 0;
       }
       publishZoneStatus(i);
+    }
+
+    // === Enable / Disable Scheduling ===
+    String enabledTopic = "sprinkler/zone" + String(i + 1) + "/enabled/set";
+    if (t == enabledTopic) {
+      schedules[i].enabled = (p == "ON");
+      publishEnabledStatus(i);           // Publish new state
     }
   }
 }
@@ -114,16 +122,15 @@ void mqttReconnect() {
   if (mqttClient.connect("SprinklerUnoR4", MQTT_USER, MQTT_PASS)) {
     Serial.println("connected");
 
-    // Subscribe to command topics
     for (int i = 0; i < NUM_ZONES; i++) {
-      String topic = "sprinkler/zone" + String(i + 1) + "/set";
-      mqttClient.subscribe(topic.c_str());
+      mqttClient.subscribe(("sprinkler/zone" + String(i + 1) + "/set").c_str());
+      mqttClient.subscribe(("sprinkler/zone" + String(i + 1) + "/enabled/set").c_str());
     }
 
-    // ← NEW: Publish current state of ALL zones on connect
-    Serial.println("Publishing initial zone states...");
+    // Publish current states
     for (int i = 0; i < NUM_ZONES; i++) {
       publishZoneStatus(i);
+      publishEnabledStatus(i);
     }
 
   } else {
@@ -137,6 +144,11 @@ void publishZoneStatus(int zone) {
   
   // Important: retain = true so HA remembers the state
   mqttClient.publish(topic.c_str(), isOn ? "ON" : "OFF", true);
+}
+
+void publishEnabledStatus(int zone) {
+  String topic = "sprinkler/zone" + String(zone + 1) + "/enabled/state";
+  mqttClient.publish(topic.c_str(), schedules[zone].enabled ? "ON" : "OFF", true);
 }
 
 // ==================== NON-BLOCKING SCHEDULER ====================
