@@ -84,16 +84,17 @@ void loop() {
   }
 }
 
-// ==================== MQTT CALLBACK (Updated) ====================
+// ==================== MQTT ====================
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   String t = String(topic);
   String p = "";
   for (unsigned int i = 0; i < length; i++) p += (char)payload[i];
 
   for (int i = 0; i < NUM_ZONES; i++) {
-    // === Manual ON/OFF ===
-    String cmdTopic = "sprinkler/zone" + String(i + 1) + "/set";
-    if (t == cmdTopic) {
+    String base = "sprinkler/zone" + String(i + 1);
+
+    if (t == base + "/set") {
+      // Manual ON/OFF
       if (p == "ON") {
         digitalWrite(relayPins[i], LOW);
         zoneOffTime[i] = millis() + (unsigned long)manualRunMinutes * 60000UL;
@@ -103,12 +104,14 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       }
       publishZoneStatus(i);
     }
-
-    // === Enable / Disable Scheduling ===
-    String enabledTopic = "sprinkler/zone" + String(i + 1) + "/enabled/set";
-    if (t == enabledTopic) {
+    else if (t == base + "/enabled/set") {
       schedules[i].enabled = (p == "ON");
-      publishEnabledStatus(i);           // Publish new state
+      publishEnabledStatus(i);
+      publishNextRunTime(i);
+    }
+    else if (t == base + "/schedule/set") {
+      updateScheduleFromMQTT(i, p);
+      publishNextRunTime(i);
     }
   }
 }
@@ -123,8 +126,10 @@ void mqttReconnect() {
     Serial.println("connected");
 
     for (int i = 0; i < NUM_ZONES; i++) {
-      mqttClient.subscribe(("sprinkler/zone" + String(i + 1) + "/set").c_str());
-      mqttClient.subscribe(("sprinkler/zone" + String(i + 1) + "/enabled/set").c_str());
+      String base = "sprinkler/zone" + String(i + 1);
+      mqttClient.subscribe((base + "/set").c_str());
+      mqttClient.subscribe((base + "/enabled/set").c_str());
+      mqttClient.subscribe((base + "/schedule/set").c_str());
     }
 
     // Publish current states
@@ -137,6 +142,44 @@ void mqttReconnect() {
   } else {
     Serial.println("failed");
   }
+}
+
+// ==================== RECEIVE SCHEDULE UPDATE ====================
+void updateScheduleFromMQTT(int zone, String payload) {
+  // Expected format: "hour:minute:duration:days:enabled"
+  // Example: "6:30:15:1,2,3,4,5:1"
+
+  int first = payload.indexOf(':');
+  int second = payload.indexOf(':', first + 1);
+  int third = payload.indexOf(':', second + 1);
+  int fourth = payload.indexOf(':', third + 1);
+
+  if (first == -1) return;
+
+  schedules[zone].startHour = payload.substring(0, first).toInt();
+  schedules[zone].startMinute = payload.substring(first + 1, second).toInt();
+  schedules[zone].durationMinutes = payload.substring(second + 1, third).toInt();
+
+  // Parse days (comma separated)
+  String daysStr = payload.substring(third + 1, fourth);
+  for (int d = 0; d < 7; d++) schedules[zone].activeDays[d] = false;
+  int start = 0;
+  while (true) {
+    int comma = daysStr.indexOf(',', start);
+    if (comma == -1) {
+      schedules[zone].activeDays[daysStr.substring(start).toInt()] = true;
+      break;
+    }
+    schedules[zone].activeDays[daysStr.substring(start, comma).toInt()] = true;
+    start = comma + 1;
+  }
+
+  schedules[zone].enabled = (payload.substring(fourth + 1).toInt() == 1);
+
+  Serial.print("Updated schedule for Zone ");
+  Serial.println(zone + 1);
+
+  publishNextRunTime(zone);
 }
 
 void publishZoneStatus(int zone) {
